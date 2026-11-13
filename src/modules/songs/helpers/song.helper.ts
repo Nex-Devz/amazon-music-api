@@ -61,19 +61,31 @@ export const createSongPayload = (resp :any, trackId: string): DetailsSong => {
       );
     }
 
-    // Find the specific track in the tracklist
-    const trackItem = albumTracklistWidget.items.find((item: any) => {
+    const trackTitle =
+      (typeof template.headerText === "object"
+        ? template.headerText?.text
+        : template.headerText) || "Unknown Title";
+
+    // Find the specific track in the tracklist by ID, or by title matching
+    let trackItem = albumTracklistWidget?.items?.find((item: any) => {
       if (!item?.primaryTextLink?.deeplink) return false;
-      const id = item.primaryTextLink.deeplink.split("/tracks/")[1];
+      const id = item.primaryTextLink.deeplink
+        .split("/tracks/")[1]
+        ?.split("/")[0]
+        ?.split("?")[0];
       return id === trackId;
     });
 
-    if (!trackItem) {
-      throw createError(
-        "Track ID not found in tracklist",
-        404,
-        "TrackNotFound"
-      );
+    if (!trackItem && trackTitle && albumTracklistWidget?.items) {
+      trackItem = albumTracklistWidget.items.find((item: any) => {
+        const itemTitle =
+          typeof item.primaryText === "object"
+            ? item.primaryText?.text
+            : item.primaryText;
+        return (
+          itemTitle && itemTitle.toLowerCase() === trackTitle.toLowerCase()
+        );
+      });
     }
 
     // Safely extract album info
@@ -121,9 +133,10 @@ export const createSongPayload = (resp :any, trackId: string): DetailsSong => {
       // ISRC extraction failed, continue with null
     }
 
-    const info: DetailsSong = {
+    const info: DetailsSong & { name?: string } = {
       id: trackId,
-      title: template.headerText?.text || "Unknown Title",
+      title: trackTitle,
+      name: trackTitle,
       url: `https://music.amazon.com/tracks/${trackId}`,
       image: template.headerImage || null,
       duration: trackItem

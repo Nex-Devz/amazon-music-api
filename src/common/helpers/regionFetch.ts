@@ -13,25 +13,27 @@ const ALL_DOMAINS: { domain: string; config: RegionConfig }[] = Object.entries(R
     ([domain, config]) => ({ domain, config })
 )
 
-// Per-domain config cache: stores fetched config.json with a TTL
-const CONFIG_CACHE = new Map<string, { data: Record<string, unknown>; fetchedAt: number }>()
+// Per-domain config cache: stores fetched config.json with a TTL and cookies
+const CONFIG_CACHE = new Map<string, { data: Record<string, unknown>; cookies: string; fetchedAt: number }>()
 const CONFIG_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
 /** Fetch config.json from a specific Amazon Music domain, with caching */
-export async function fetchDomainConfig(domain: string): Promise<Record<string, unknown>> {
+export async function fetchDomainConfig(domain: string): Promise<{ data: Record<string, unknown>; cookies: string }> {
     const now = Date.now()
     const cached = CONFIG_CACHE.get(domain)
     if (cached && now - cached.fetchedAt < CONFIG_TTL_MS) {
-        return cached.data
+        return { data: cached.data, cookies: cached.cookies }
     }
 
-    const configUrl = `https://${domain}/config.json`
-    const response = await axios.get(configUrl, {
+    const configUrl = `https://${domain}/config.json?skipToken=false&clientApplication=skyfire`
+    const response = await axios.post(configUrl, '', {
         headers: {
+            'content-type': 'text/plain;charset=UTF-8',
             accept: '*/*',
             'accept-language': 'en-US,en;q=0.9',
             'user-agent': getRandomUserAgent(),
             referer: `https://${domain}/`,
+            origin: `https://${domain}`,
             'sec-ch-ua': '"Chromium";v="125", "Not.A/Brand";v="24"',
             'sec-ch-ua-mobile': '?1',
             'sec-ch-ua-platform': '"Android"',
@@ -46,9 +48,16 @@ export async function fetchDomainConfig(domain: string): Promise<Record<string, 
         throw new Error(`Failed to fetch config from ${domain}: HTTP ${response.status}`)
     }
 
+    const setCookieHeaders = response.headers['set-cookie']
+    const cookies = Array.isArray(setCookieHeaders)
+        ? setCookieHeaders.map((c: string) => c.split(';')[0]).join('; ')
+        : typeof setCookieHeaders === 'string'
+          ? (setCookieHeaders as string).split(';')[0]
+          : ''
+
     const data = response.data as Record<string, unknown>
-    CONFIG_CACHE.set(domain, { data, fetchedAt: now })
-    return data
+    CONFIG_CACHE.set(domain, { data, cookies, fetchedAt: now })
+    return { data, cookies }
 }
 
 export interface RegionFetchResult {
@@ -79,7 +88,7 @@ async function fetchFromEndpoint(
     regionCfg: RegionConfig,
     domain: string
 ): Promise<Record<string, unknown>> {
-    const domainConfig = await fetchDomainConfig(domain)
+    const { data: domainConfig, cookies } = await fetchDomainConfig(domain)
 
     const url = `${regionCfg.skillEndpoint}${apiPath}`
 
@@ -105,7 +114,8 @@ async function fetchFromEndpoint(
         authority: new URL(regionCfg.skillEndpoint).host,
         origin: `https://${domain}`,
         referer: `https://${domain}/`,
-        'user-agent': getRandomUserAgent()
+        'user-agent': getRandomUserAgent(),
+        ...(cookies ? { cookie: cookies } : {})
     }
 
     const response = await axios.post(url, requestBody, {

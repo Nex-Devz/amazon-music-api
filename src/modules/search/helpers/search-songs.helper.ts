@@ -14,9 +14,15 @@ interface WidgetItem {
     }
     primaryText?: {
         text: string
-    }
+    } | string
     secondaryText?: string
+    secondaryText1?: string
+    secondaryText2?: string
+    secondaryText3?: string
     secondaryLink?: {
+        deeplink: string
+    }
+    secondaryText1Link?: {
         deeplink: string
     }
     image?: string
@@ -35,9 +41,15 @@ interface PaginationWidgetItem {
     }
     primaryText?: {
         text: string
-    }
+    } | string
     secondaryText?: string
+    secondaryText1?: string
+    secondaryText2?: string
+    secondaryText3?: string
     secondaryLink?: {
+        deeplink: string
+    }
+    secondaryText1Link?: {
         deeplink: string
     }
     image?: string
@@ -51,11 +63,21 @@ interface PaginationWidgetItem {
 export const createSearchSongsPayload = async (config: any, resp: any, limit?: number): Promise<SearchSong[]> => {
     const songs: SearchSong[] = []
 
-    if (!resp?.methods?.[0]?.template?.widgets?.[0]?.items) {
-        throw createError('Invalid response structure for songs search', 500, 'InvalidResponseError')
+    let songItems: WidgetItem[] = []
+    const widgets = resp?.methods?.[0]?.template?.widgets
+    if (Array.isArray(widgets)) {
+        for (const widget of widgets) {
+            if (Array.isArray(widget.items)) {
+                songItems.push(...widget.items)
+            }
+        }
+    } else if (Array.isArray(resp?.methods?.[0]?.items)) {
+        songItems.push(...resp.methods[0].items)
     }
 
-    let songItems: WidgetItem[] = resp.methods[0].template.widgets[0].items
+    if (songItems.length === 0) {
+        throw createError('No songs found for the given search query', 404, 'NoSongsError')
+    }
 
     // Apply limit early to only process requested number of songs
     if (limit && limit > 0) {
@@ -77,8 +99,14 @@ export const createSearchSongsPayload = async (config: any, resp: any, limit?: n
             }
 
             const songAlbumData = await axios.post(ENDPOINTS.ALBUM_INFO, body, {
-                headers: DEFAULT_HEADERS,
-                timeout: 2000
+                headers: {
+                    ...DEFAULT_HEADERS,
+                    authority: new URL(ENDPOINTS.ALBUM_INFO).host,
+                    origin: 'https://music.amazon.com',
+                    referer: 'https://music.amazon.com/',
+                    ...(config?._cookies ? { cookie: config._cookies } : {})
+                },
+                timeout: 5000
             })
 
             return songAlbumData.data
@@ -136,8 +164,11 @@ export const createSearchSongsPayload = async (config: any, resp: any, limit?: n
             if (!songId) return null
 
             let duration = 0
-            const artistId = item.secondaryLink?.deeplink?.split('/artists/')[1]?.split('/')[0] || ''
-            const artistName = item.secondaryText || 'Unknown Artist'
+            const artistId =
+                item.secondaryLink?.deeplink?.split('/artists/')[1]?.split('/')[0] ||
+                item.secondaryText1Link?.deeplink?.split('/artists/')[1]?.split('/')[0] ||
+                ''
+            const artistName = item.secondaryText || item.secondaryText1 || 'Unknown Artist'
 
             // Use cached album data to find duration
             const albumData = albumDataCache.get(albumId)
@@ -160,15 +191,29 @@ export const createSearchSongsPayload = async (config: any, resp: any, limit?: n
 
             const artistUrl = item.secondaryLink?.deeplink
                 ? `https://music.amazon.com${item.secondaryLink.deeplink}`
-                : null
+                : item.secondaryText1Link?.deeplink
+                  ? `https://music.amazon.com${item.secondaryText1Link.deeplink}`
+                  : null
 
             const albumUrl =
                 item.contextMenu?.options?.[0]?.onItemSelected?.[1]?.template?.templateData?.seoHead?.link?.[0]?.href ||
                 `https://music.amazon.com/albums/${albumId}`
 
+            const songTitle =
+                (typeof item.primaryText === 'object' ? item.primaryText?.text : item.primaryText) ||
+                'Unknown Title'
+
+            const albumHeader = albumData?.methods?.[0]?.template?.headerText
+            const albumNameFromData = typeof albumHeader === 'object' ? albumHeader?.text : albumHeader
+            const albumName =
+                item.contextMenu?.options?.[0]?.onItemSelected?.[1]?.template?.headerText?.text ||
+                albumNameFromData ||
+                item.secondaryText2 ||
+                'Unknown Album'
+
             return {
                 id: songId,
-                title: item.primaryText?.text || 'Unknown Title',
+                title: songTitle,
                 url: songId ? `https://music.amazon.com/tracks/${songId}` : null,
                 image: cleanImageUrl(item.image || null),
                 duration: duration,
@@ -180,9 +225,7 @@ export const createSearchSongsPayload = async (config: any, resp: any, limit?: n
                 },
                 album: {
                     id: albumId,
-                    name:
-                        item.contextMenu?.options?.[0]?.onItemSelected?.[1]?.template?.headerText?.text ||
-                        'Unknown Album',
+                    name: albumName,
                     url: albumUrl
                 }
             }
@@ -206,11 +249,20 @@ export const createSearchSongsPayload = async (config: any, resp: any, limit?: n
 export const createSearchSongsPagePayload = async (config: any, resp: any, limit?: number): Promise<SearchSong[]> => {
     const songs: SearchSong[] = []
 
-    if (!resp?.methods?.[0]?.items) {
-        throw createError('Invalid response structure for songs pagination', 500, 'InvalidResponseError')
+    let songItems: PaginationWidgetItem[] = []
+    if (Array.isArray(resp?.methods?.[0]?.items)) {
+        songItems = resp.methods[0].items
+    } else if (Array.isArray(resp?.methods?.[0]?.template?.widgets)) {
+        for (const widget of resp.methods[0].template.widgets) {
+            if (Array.isArray(widget.items)) {
+                songItems.push(...widget.items)
+            }
+        }
     }
 
-    let songItems: PaginationWidgetItem[] = resp.methods[0].items
+    if (songItems.length === 0) {
+        throw createError('No songs found for the given search query', 404, 'NoSongsError')
+    }
 
     // Apply limit early to only process requested number of songs
     if (limit && limit > 0) {
@@ -219,7 +271,7 @@ export const createSearchSongsPagePayload = async (config: any, resp: any, limit
 
     // ⬇ Extract next pagination token (same as before but untouched)
     let nextTokenForPagination = null
-    if (resp.methods[0].onEndOfWidget && resp.methods[0].onEndOfWidget[0]) {
+    if (resp.methods?.[0]?.onEndOfWidget && resp.methods[0].onEndOfWidget[0]) {
         const onEndOfWidgetUrl = resp.methods[0].onEndOfWidget[0].url
         if (onEndOfWidgetUrl) {
             const urlParams = new URLSearchParams(onEndOfWidgetUrl.split('?')[1])
@@ -257,8 +309,14 @@ export const createSearchSongsPagePayload = async (config: any, resp: any, limit
             }
 
             const res = await axios.post(ENDPOINTS.ALBUM_INFO, body, {
-                headers: DEFAULT_HEADERS,
-                timeout: 2000
+                headers: {
+                    ...DEFAULT_HEADERS,
+                    authority: new URL(ENDPOINTS.ALBUM_INFO).host,
+                    origin: 'https://music.amazon.com',
+                    referer: 'https://music.amazon.com/',
+                    ...(config?._cookies ? { cookie: config._cookies } : {})
+                },
+                timeout: 5000
             })
 
             return res.data
@@ -303,14 +361,18 @@ export const createSearchSongsPagePayload = async (config: any, resp: any, limit
                 let duration = 0
                 let albumName = 'Unknown Album'
 
-                const artistId = item.secondaryLink?.deeplink?.split('/artists/')[1]?.split('/')[0] || ''
-                const artistName = item.secondaryText || 'Unknown Artist'
+                const artistId =
+                    item.secondaryLink?.deeplink?.split('/artists/')[1]?.split('/')[0] ||
+                    item.secondaryText1Link?.deeplink?.split('/artists/')[1]?.split('/')[0] ||
+                    ''
+                const artistName = item.secondaryText || item.secondaryText1 || 'Unknown Artist'
 
                 // ⬇ Use CACHE not API
                 const albumData = albumDataCache.get(albumId)
 
                 if (albumData?.methods?.[0]?.template) {
-                    albumName = albumData.methods[0].template.headerText?.text || 'Unknown Album'
+                    const hText = albumData.methods[0].template.headerText
+                    albumName = (typeof hText === 'object' ? hText?.text : hText) || 'Unknown Album'
                 }
 
                 if (albumData?.methods?.[0]?.template?.widgets?.[0]) {
@@ -333,15 +395,21 @@ export const createSearchSongsPagePayload = async (config: any, resp: any, limit
 
                 const artistUrl = item.secondaryLink?.deeplink
                     ? `https://music.amazon.com${item.secondaryLink.deeplink}`
-                    : null
+                    : item.secondaryText1Link?.deeplink
+                      ? `https://music.amazon.com${item.secondaryText1Link.deeplink}`
+                      : null
 
                 const albumUrl =
                     item.contextMenu?.options?.[0]?.onItemSelected?.[1]?.template?.templateData?.seoHead?.link?.[0]
                         ?.href || `https://music.amazon.com/albums/${albumId}`
 
+                const songTitle =
+                    (typeof item.primaryText === 'object' ? item.primaryText?.text : item.primaryText) ||
+                    'Unknown Title'
+
                 return {
                     id: trackId,
-                    title: item.primaryText?.text || 'Unknown Title',
+                    title: songTitle,
                     url: trackId ? `https://music.amazon.com/tracks/${trackId}` : null,
                     image: cleanImageUrl(item.image || null),
                     duration,

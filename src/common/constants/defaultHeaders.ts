@@ -1,7 +1,7 @@
 import { getRandomUserAgent } from './userAgents.js'
 
 export const DEFAULT_HEADERS = {
-    authority: 'eu.mesk.skill.music.a2z.com',
+    authority: 'na.web.skill.music.a2z.com',
     accept: '*/*',
     'accept-language': 'en-US,en;q=0.9',
     'content-type': 'text/plain;charset=UTF-8',
