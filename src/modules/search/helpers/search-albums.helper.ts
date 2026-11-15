@@ -40,18 +40,27 @@ interface PaginationWidgetItem {
 export const createSearchAlbumPayload = (resp: any): SearchAlbum[] => {
     const albums: SearchAlbum[] = []
 
-    // Add safety check for response structure
-    if (!resp?.methods?.[0]?.template?.widgets?.[0]?.items) {
-        throw createError('Invalid response structure for albums search', 500, 'InvalidResponseError')
+    let albumItems: WidgetItem[] = []
+    const widgets = resp?.methods?.[0]?.template?.widgets
+    if (Array.isArray(widgets)) {
+        for (const widget of widgets) {
+            if (Array.isArray(widget.items)) {
+                albumItems.push(...widget.items)
+            }
+        }
+    } else if (Array.isArray(resp?.methods?.[0]?.items)) {
+        albumItems.push(...resp.methods[0].items)
     }
 
-    const albumItems: WidgetItem[] = resp.methods[0].template.widgets[0].items
+    if (albumItems.length === 0) {
+        throw createError('No albums found for the given search query', 404, 'NoAlbumsFound')
+    }
 
     // Extract next token for pagination
     let nextTokenForPagination = null
     if (
-        resp.methods[0].template.widgets &&
-        resp.methods[0].template.widgets[0].onEndOfWidget &&
+        resp.methods?.[0]?.template?.widgets &&
+        resp.methods[0].template.widgets[0]?.onEndOfWidget &&
         resp.methods[0].template.widgets[0].onEndOfWidget[0]
     ) {
         const onEndOfWidgetUrl = resp.methods[0].template.widgets[0].onEndOfWidget[0].url
@@ -74,9 +83,13 @@ export const createSearchAlbumPayload = (resp: any): SearchAlbum[] => {
             // Extract artist ID from secondaryLink
             const artistId = item.secondaryLink?.deeplink?.split('/artists/')[1]?.split('/')[0] || null
 
+            const albumName =
+                (typeof item.primaryText === 'object' ? (item.primaryText as any)?.text : item.primaryText) ||
+                'Unknown Album'
+
             return {
                 id: albumId,
-                name: item.primaryText?.text || 'Unknown Album',
+                name: albumName,
                 url: albumId ? `https://music.amazon.com/albums/${albumId}` : null,
                 image: cleanImageUrl(item.image || null),
                 artist: {
@@ -101,16 +114,24 @@ export const createSearchAlbumPayload = (resp: any): SearchAlbum[] => {
 export const createSearchAlbumPagePayload = (resp: any): SearchAlbum[] => {
     const albums: SearchAlbum[] = []
 
-    // Add safety check for pagination response structure
-    if (!resp?.methods?.[0]?.items) {
-        throw createError('Invalid response structure for albums pagination', 500, 'InvalidResponseError')
+    let albumItems: PaginationWidgetItem[] = []
+    if (Array.isArray(resp?.methods?.[0]?.items)) {
+        albumItems = resp.methods[0].items
+    } else if (Array.isArray(resp?.methods?.[0]?.template?.widgets)) {
+        for (const widget of resp.methods[0].template.widgets) {
+            if (Array.isArray(widget.items)) {
+                albumItems.push(...widget.items)
+            }
+        }
     }
 
-    const albumItems: PaginationWidgetItem[] = resp.methods[0].items
+    if (albumItems.length === 0) {
+        throw createError('No albums found for the given search query on this page', 404, 'NoAlbumsFound')
+    }
 
     // Extract next token for pagination
     let nextTokenForPagination = null
-    if (resp.methods[0].onEndOfWidget && resp.methods[0].onEndOfWidget[0]) {
+    if (resp.methods?.[0]?.onEndOfWidget && resp.methods[0].onEndOfWidget[0]) {
         const onEndOfWidgetUrl = resp.methods[0].onEndOfWidget[0].url
         if (onEndOfWidgetUrl) {
             const urlParams = new URLSearchParams(onEndOfWidgetUrl.split('?')[1])
@@ -127,9 +148,13 @@ export const createSearchAlbumPagePayload = (resp: any): SearchAlbum[] => {
             // Extract artist ID from secondaryLink
             const artistId = item.secondaryLink?.deeplink?.split('/artists/')[1]?.split('/')[0] || null
 
+            const albumName =
+                (typeof item.primaryText === 'object' ? (item.primaryText as any)?.text : item.primaryText) ||
+                'Unknown Album'
+
             return {
                 id: albumId,
-                name: item.primaryText?.text || 'Unknown Album',
+                name: albumName,
                 url: albumId ? `https://music.amazon.com/albums/${albumId}` : null,
                 image: cleanImageUrl(item.image || null),
                 artist: {

@@ -31,19 +31,34 @@ interface PaginationWidgetItem {
 export const createSearchCommunityPlaylistPayload = (resp: any): SearchCommunityPl[] => {
     const communityPlaylists: SearchCommunityPl[] = []
 
-    // Add safety check for response structure
-    if (!resp?.methods?.[0]?.template?.widgets?.[0]?.items) {
-        throw createError('Invalid response structure for community playlists search', 500, 'InvalidResponseError')
+    let communityPlaylistItems: WidgetItem[] = []
+    const widgets = resp?.methods?.[0]?.template?.widgets
+    if (Array.isArray(widgets)) {
+        for (const widget of widgets) {
+            if (Array.isArray(widget.items)) {
+                communityPlaylistItems.push(...widget.items)
+            }
+        }
+    } else if (Array.isArray(resp?.methods?.[0]?.items)) {
+        communityPlaylistItems.push(...resp.methods[0].items)
     }
 
-    const communityPlaylistItems: WidgetItem[] = resp.methods[0].template.widgets[0].items
+    if (communityPlaylistItems.length === 0) {
+        throw createError('No community playlists found for the given keyword', 404, 'NoCommunityPlaylistsFound')
+    }
 
     // Extract next token for pagination
     let nextTokenForPagination = null
-    if (resp.methods[0].template.widgets[0].onEndOfWidget) {
+    if (
+        resp.methods?.[0]?.template?.widgets &&
+        resp.methods[0].template.widgets[0]?.onEndOfWidget &&
+        resp.methods[0].template.widgets[0].onEndOfWidget[0]
+    ) {
         const onEndOfWidgetUrl = resp.methods[0].template.widgets[0].onEndOfWidget[0].url
-        const urlParams = new URLSearchParams(onEndOfWidgetUrl.split('?')[1])
-        nextTokenForPagination = urlParams.get('next')
+        if (onEndOfWidgetUrl) {
+            const urlParams = new URLSearchParams(onEndOfWidgetUrl.split('?')[1])
+            nextTokenForPagination = urlParams.get('next')
+        }
     }
 
     const items = communityPlaylistItems
@@ -52,9 +67,14 @@ export const createSearchCommunityPlaylistPayload = (resp: any): SearchCommunity
 
             if (!id) return null
 
+            const name =
+                item.primaryText?.observer?.defaultValue?.text ||
+                (typeof item.primaryText === 'object' ? (item.primaryText as any)?.text : item.primaryText) ||
+                'Unknown Community Playlist'
+
             return {
                 id: id,
-                name: item.primaryText?.observer?.defaultValue?.text || 'Unknown Community Playlist',
+                name,
                 url: id ? `https://music.amazon.com/user-playlists/${id}` : null,
                 image: cleanImageUrl(item.image || null),
                 createdBy: item.secondaryText || 'Amazon Music Community'
@@ -75,16 +95,28 @@ export const createSearchCommunityPlaylistPayload = (resp: any): SearchCommunity
 export const createSearchCommunityPlaylistPagePayload = (resp: any): SearchCommunityPl[] => {
     const communityPlaylists: SearchCommunityPl[] = []
 
-    // Add safety check for pagination response structure
-    if (!resp?.methods?.[0]?.items) {
-        throw createError('Invalid response structure for community playlists pagination', 500, 'InvalidResponseError')
+    let communityPlaylistItems: PaginationWidgetItem[] = []
+    if (Array.isArray(resp?.methods?.[0]?.items)) {
+        communityPlaylistItems = resp.methods[0].items
+    } else if (Array.isArray(resp?.methods?.[0]?.template?.widgets)) {
+        for (const widget of resp.methods[0].template.widgets) {
+            if (Array.isArray(widget.items)) {
+                communityPlaylistItems.push(...widget.items)
+            }
+        }
     }
 
-    const communityPlaylistItems: PaginationWidgetItem[] = resp.methods[0].items
+    if (communityPlaylistItems.length === 0) {
+        throw createError(
+            'No community playlists found for the given keyword on this page',
+            404,
+            'NoCommunityPlaylistsFound'
+        )
+    }
 
     // Extract next token for pagination
     let nextTokenForPagination = null
-    if (resp.methods[0].onEndOfWidget && resp.methods[0].onEndOfWidget[0]) {
+    if (resp.methods?.[0]?.onEndOfWidget && resp.methods[0].onEndOfWidget[0]) {
         const onEndOfWidgetUrl = resp.methods[0].onEndOfWidget[0].url
         if (onEndOfWidgetUrl) {
             const urlParams = new URLSearchParams(onEndOfWidgetUrl.split('?')[1])
@@ -98,9 +130,14 @@ export const createSearchCommunityPlaylistPagePayload = (resp: any): SearchCommu
 
             if (!id) return null
 
+            const name =
+                item.primaryText?.observer?.defaultValue?.text ||
+                (typeof item.primaryText === 'object' ? (item.primaryText as any)?.text : item.primaryText) ||
+                'Unknown Community Playlist'
+
             return {
                 id: id,
-                name: item.primaryText?.observer?.defaultValue?.text || 'Unknown Community Playlist',
+                name,
                 url: id ? `https://music.amazon.com/user-playlists/${id}` : null,
                 image: cleanImageUrl(item.image || null),
                 createdBy: item.secondaryText || 'Amazon Music Community'

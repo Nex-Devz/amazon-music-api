@@ -39,19 +39,34 @@ interface PaginationWidgetItem {
 export const createSearchPlaylistPayload = (resp: any): SearchPlaylist[] => {
     const playlists: SearchPlaylist[] = []
 
-    // Add safety check for response structure
-    if (!resp?.methods?.[0]?.template?.widgets?.[0]?.items) {
-        throw createError('Invalid response structure for playlists search', 500, 'InvalidResponseError')
+    let playlistItems: WidgetItem[] = []
+    const widgets = resp?.methods?.[0]?.template?.widgets
+    if (Array.isArray(widgets)) {
+        for (const widget of widgets) {
+            if (Array.isArray(widget.items)) {
+                playlistItems.push(...widget.items)
+            }
+        }
+    } else if (Array.isArray(resp?.methods?.[0]?.items)) {
+        playlistItems.push(...resp.methods[0].items)
     }
 
-    const playlistItems: WidgetItem[] = resp.methods[0].template.widgets[0].items
+    if (playlistItems.length === 0) {
+        throw createError('No playlists found for the given search query', 404, 'NoPlaylistsFound')
+    }
 
     // Extract next token for pagination
     let nextTokenForPagination = null
-    if (resp.methods[0].template.widgets[0].onEndOfWidget) {
+    if (
+        resp.methods?.[0]?.template?.widgets &&
+        resp.methods[0].template.widgets[0]?.onEndOfWidget &&
+        resp.methods[0].template.widgets[0].onEndOfWidget[0]
+    ) {
         const onEndOfWidgetUrl = resp.methods[0].template.widgets[0].onEndOfWidget[0].url
-        const urlParams = new URLSearchParams(onEndOfWidgetUrl.split('?')[1])
-        nextTokenForPagination = urlParams.get('next')
+        if (onEndOfWidgetUrl) {
+            const urlParams = new URLSearchParams(onEndOfWidgetUrl.split('?')[1])
+            nextTokenForPagination = urlParams.get('next')
+        }
     }
 
     const items = playlistItems
@@ -60,9 +75,14 @@ export const createSearchPlaylistPayload = (resp: any): SearchPlaylist[] => {
 
             if (!playlistId) return null
 
+            const playlistName =
+                (typeof item.primaryText === 'object'
+                    ? (item.primaryText as any)?.observer?.defaultValue?.text || (item.primaryText as any)?.text
+                    : item.primaryText) || 'Unknown Playlist'
+
             return {
                 id: playlistId,
-                name: item.primaryText?.observer?.defaultValue?.text || item.primaryText?.text || 'Unknown Playlist',
+                name: playlistName,
                 url: playlistId ? `https://music.amazon.com/playlists/${playlistId}` : null,
                 image: cleanImageUrl(item.image || null),
                 createdBy: 'Amazon Music'
@@ -83,16 +103,24 @@ export const createSearchPlaylistPayload = (resp: any): SearchPlaylist[] => {
 export const createSearchPlaylistPagePayload = (resp: any): SearchPlaylist[] => {
     const playlists: SearchPlaylist[] = []
 
-    // Add safety check for pagination response structure
-    if (!resp?.methods?.[0]?.items) {
-        throw createError('Invalid response structure for playlists pagination', 500, 'InvalidResponseError')
+    let playlistItems: PaginationWidgetItem[] = []
+    if (Array.isArray(resp?.methods?.[0]?.items)) {
+        playlistItems = resp.methods[0].items
+    } else if (Array.isArray(resp?.methods?.[0]?.template?.widgets)) {
+        for (const widget of resp.methods[0].template.widgets) {
+            if (Array.isArray(widget.items)) {
+                playlistItems.push(...widget.items)
+            }
+        }
     }
 
-    const playlistItems: PaginationWidgetItem[] = resp.methods[0].items
+    if (playlistItems.length === 0) {
+        throw createError('No playlists found for the given search query', 404, 'NoPlaylistsFound')
+    }
 
     // Extract next token for pagination
     let nextTokenForPagination = null
-    if (resp.methods[0].onEndOfWidget && resp.methods[0].onEndOfWidget[0]) {
+    if (resp.methods?.[0]?.onEndOfWidget && resp.methods[0].onEndOfWidget[0]) {
         const onEndOfWidgetUrl = resp.methods[0].onEndOfWidget[0].url
         if (onEndOfWidgetUrl) {
             const urlParams = new URLSearchParams(onEndOfWidgetUrl.split('?')[1])
@@ -106,9 +134,14 @@ export const createSearchPlaylistPagePayload = (resp: any): SearchPlaylist[] => 
 
             if (!playlistId) return null
 
+            const playlistName =
+                (typeof item.primaryText === 'object'
+                    ? (item.primaryText as any)?.observer?.defaultValue?.text || (item.primaryText as any)?.text
+                    : item.primaryText) || 'Unknown Playlist'
+
             return {
                 id: playlistId,
-                name: item.primaryText?.observer?.defaultValue?.text || item.primaryText?.text || 'Unknown Playlist',
+                name: playlistName,
                 url: playlistId ? `https://music.amazon.com/playlists/${playlistId}` : null,
                 image: cleanImageUrl(item.image || null),
                 createdBy: 'Amazon Music'

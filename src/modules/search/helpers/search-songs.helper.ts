@@ -106,12 +106,11 @@ export const createSearchSongsPayload = async (config: any, resp: any, limit?: n
                     referer: 'https://music.amazon.com/',
                     ...(config?._cookies ? { cookie: config._cookies } : {})
                 },
-                timeout: 5000
+                timeout: 2500
             })
 
             return songAlbumData.data
         } catch (error: any) {
-            console.log(`❌ Failed album ${albumId}: ${error.message}`)
             return null
         }
     }
@@ -130,29 +129,13 @@ export const createSearchSongsPayload = async (config: any, resp: any, limit?: n
 
     const albumIds = Array.from(uniqueAlbums)
 
-    // Fetch albums in batches of 5 with 100ms delay between batches
-    const BATCH_SIZE = 5
-    const DELAY_BETWEEN_BATCHES = 100
-
-    for (let i = 0; i < albumIds.length; i += BATCH_SIZE) {
-        const batch = albumIds.slice(i, i + BATCH_SIZE)
-
-        // Process batch in parallel
-        const batchPromises = batch.map((albumId) => fetchAlbumData(albumId as string))
-        const batchResults = await Promise.all(batchPromises)
-
-        // Store results in cache
-        batch.forEach((albumId, index) => {
-            if (batchResults[index]) {
-                albumDataCache.set(albumId, batchResults[index])
-            }
+    // Fetch unique albums concurrently with 2.5s timeout
+    await Promise.allSettled(
+        albumIds.map(async (albumId) => {
+            const data = await fetchAlbumData(albumId as string)
+            if (data) albumDataCache.set(albumId, data)
         })
-
-        // Add delay between batches (except for last batch)
-        if (i + BATCH_SIZE < albumIds.length) {
-            await new Promise((resolve) => setTimeout(resolve, DELAY_BETWEEN_BATCHES))
-        }
-    }
+    )
 
     // Process all songs with the fetched album data
     const items = songItems.map((item: WidgetItem) => {
@@ -195,9 +178,15 @@ export const createSearchSongsPayload = async (config: any, resp: any, limit?: n
                   ? `https://music.amazon.com${item.secondaryText1Link.deeplink}`
                   : null
 
-            const albumUrl =
-                item.contextMenu?.options?.[0]?.onItemSelected?.[1]?.template?.templateData?.seoHead?.link?.[0]?.href ||
-                `https://music.amazon.com/albums/${albumId}`
+            const viewAlbumOpt = item.contextMenu?.options?.find(
+                (opt: any) => typeof opt?.text === 'string' && opt.text.toLowerCase().includes('album')
+            )
+            const albumTemplate = viewAlbumOpt?.onItemSelected?.[1]?.template
+            const headerTextObj = albumTemplate?.headerText
+            const extractedAlbumName = typeof headerTextObj === 'object' ? headerTextObj?.text : headerTextObj
+            const extractedAlbumUrl =
+                albumTemplate?.templateData?.seoHead?.link?.[0]?.href ||
+                (albumId ? `https://music.amazon.com/albums/${albumId}` : null)
 
             const songTitle =
                 (typeof item.primaryText === 'object' ? item.primaryText?.text : item.primaryText) ||
@@ -206,10 +195,12 @@ export const createSearchSongsPayload = async (config: any, resp: any, limit?: n
             const albumHeader = albumData?.methods?.[0]?.template?.headerText
             const albumNameFromData = typeof albumHeader === 'object' ? albumHeader?.text : albumHeader
             const albumName =
-                item.contextMenu?.options?.[0]?.onItemSelected?.[1]?.template?.headerText?.text ||
+                extractedAlbumName ||
                 albumNameFromData ||
                 item.secondaryText2 ||
                 'Unknown Album'
+
+            const albumUrl = extractedAlbumUrl || (albumId ? `https://music.amazon.com/albums/${albumId}` : null)
 
             return {
                 id: songId,
@@ -316,35 +307,24 @@ export const createSearchSongsPagePayload = async (config: any, resp: any, limit
                     referer: 'https://music.amazon.com/',
                     ...(config?._cookies ? { cookie: config._cookies } : {})
                 },
-                timeout: 5000
+                timeout: 2500
             })
 
             return res.data
         } catch (err: any) {
-            console.log(`❌ Failed album ${albumId}: ${err.message}`)
             return null
         }
     }
 
     // -----------------------------------------
-    // 3) BATCH FETCH ALBUMS (5 AT A TIME)
+    // 3) CONCURRENT FETCH ALBUMS
     // -----------------------------------------
-    const BATCH_SIZE = 5
-    const DELAY = 100
-
-    for (let i = 0; i < albumIds.length; i += BATCH_SIZE) {
-        const batch = albumIds.slice(i, i + BATCH_SIZE)
-
-        const results = await Promise.all(batch.map((albumId) => fetchAlbumData(albumId as string)))
-
-        batch.forEach((albumId, index) => {
-            if (results[index]) albumDataCache.set(albumId, results[index])
+    await Promise.allSettled(
+        albumIds.map(async (albumId) => {
+            const data = await fetchAlbumData(albumId as string)
+            if (data) albumDataCache.set(albumId, data)
         })
-
-        if (i + BATCH_SIZE < albumIds.length) {
-            await new Promise((res) => setTimeout(res, DELAY))
-        }
-    }
+    )
 
     // -----------------------------------------
     // 4) PROCESS SONG ITEMS USING CACHE
@@ -359,7 +339,6 @@ export const createSearchSongsPagePayload = async (config: any, resp: any, limit
                 if (!trackId) return null
 
                 let duration = 0
-                let albumName = 'Unknown Album'
 
                 const artistId =
                     item.secondaryLink?.deeplink?.split('/artists/')[1]?.split('/')[0] ||
@@ -369,11 +348,6 @@ export const createSearchSongsPagePayload = async (config: any, resp: any, limit
 
                 // ⬇ Use CACHE not API
                 const albumData = albumDataCache.get(albumId)
-
-                if (albumData?.methods?.[0]?.template) {
-                    const hText = albumData.methods[0].template.headerText
-                    albumName = (typeof hText === 'object' ? hText?.text : hText) || 'Unknown Album'
-                }
 
                 if (albumData?.methods?.[0]?.template?.widgets?.[0]) {
                     const albumTracks = albumData.methods[0].template.widgets[0].items
@@ -399,9 +373,25 @@ export const createSearchSongsPagePayload = async (config: any, resp: any, limit
                       ? `https://music.amazon.com${item.secondaryText1Link.deeplink}`
                       : null
 
-                const albumUrl =
-                    item.contextMenu?.options?.[0]?.onItemSelected?.[1]?.template?.templateData?.seoHead?.link?.[0]
-                        ?.href || `https://music.amazon.com/albums/${albumId}`
+                const viewAlbumOpt = item.contextMenu?.options?.find(
+                    (opt: any) => typeof opt?.text === 'string' && opt.text.toLowerCase().includes('album')
+                )
+                const albumTemplate = viewAlbumOpt?.onItemSelected?.[1]?.template
+                const headerTextObj = albumTemplate?.headerText
+                const extractedAlbumName = typeof headerTextObj === 'object' ? headerTextObj?.text : headerTextObj
+                const extractedAlbumUrl =
+                    albumTemplate?.templateData?.seoHead?.link?.[0]?.href ||
+                    (albumId ? `https://music.amazon.com/albums/${albumId}` : null)
+
+                const albumHeader = albumData?.methods?.[0]?.template?.headerText
+                const albumNameFromData = typeof albumHeader === 'object' ? albumHeader?.text : albumHeader
+                const albumName =
+                    extractedAlbumName ||
+                    albumNameFromData ||
+                    item.secondaryText2 ||
+                    'Unknown Album'
+
+                const albumUrl = extractedAlbumUrl || (albumId ? `https://music.amazon.com/albums/${albumId}` : null)
 
                 const songTitle =
                     (typeof item.primaryText === 'object' ? item.primaryText?.text : item.primaryText) ||

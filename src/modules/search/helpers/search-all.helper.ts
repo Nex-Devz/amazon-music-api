@@ -187,38 +187,31 @@ export const createSearchAllPayload = async (config: any, resp: any): Promise<Se
                 }
 
                 const result = await axios.post(ENDPOINTS.ALBUM_INFO, body, {
-                    headers: DEFAULT_HEADERS,
+                    headers: {
+                        ...DEFAULT_HEADERS,
+                        authority: new URL(ENDPOINTS.ALBUM_INFO).host,
+                        origin: 'https://music.amazon.com',
+                        referer: 'https://music.amazon.com/',
+                        ...(config?._cookies ? { cookie: config._cookies } : {})
+                    },
                     timeout: 2000
                 })
 
                 return result.data
             } catch (err: any) {
-                console.log(`❌ Failed album ${albumId}: ${err.message}`)
                 return null
             }
         }
 
         // ------------------------------
-        // 4) Batch fetch albums
+        // 4) Concurrent fetch albums
         // ------------------------------
-        const BATCH_SIZE = 5
-        const DELAY = 100
-
-        for (let i = 0; i < albumIds.length; i += BATCH_SIZE) {
-            const batch = albumIds.slice(i, i + BATCH_SIZE)
-
-            const results = await Promise.all(batch.map((id) => fetchAlbumData(id)))
-
-            batch.forEach((id, index) => {
-                if (results[index]) {
-                    albumDataCache.set(id, results[index])
-                }
+        await Promise.allSettled(
+            albumIds.map(async (id) => {
+                const data = await fetchAlbumData(id)
+                if (data) albumDataCache.set(id, data)
             })
-
-            if (i + BATCH_SIZE < albumIds.length) {
-                await new Promise((res) => setTimeout(res, DELAY))
-            }
-        }
+        )
 
         // ------------------------------
         // 5) Process each song using cache
@@ -228,14 +221,9 @@ export const createSearchAllPayload = async (config: any, resp: any): Promise<Se
             const [albumId, songId] = storageKey.split(':')
 
             let duration = 0
-            let albumName = 'Unknown Album'
 
             if (albumId && songId) {
                 const albumData = albumDataCache.get(albumId)
-
-                if (albumData?.methods?.[0]?.template) {
-                    albumName = albumData.methods[0].template.headerText?.text || 'Unknown Album'
-                }
 
                 if (albumData?.methods?.[0]?.template?.widgets?.[0]?.items) {
                     const tracks = albumData.methods[0].template.widgets[0].items
@@ -254,9 +242,31 @@ export const createSearchAllPayload = async (config: any, resp: any): Promise<Se
                 }
             }
 
+            const viewAlbumOpt = item.contextMenu?.options?.find(
+                (opt: any) => typeof opt?.text === 'string' && opt.text.toLowerCase().includes('album')
+            )
+            const albumTemplate = viewAlbumOpt?.onItemSelected?.[1]?.template
+            const headerTextObj = albumTemplate?.headerText
+            const extractedAlbumName = typeof headerTextObj === 'object' ? headerTextObj?.text : headerTextObj
+            const extractedAlbumUrl =
+                albumTemplate?.templateData?.seoHead?.link?.[0]?.href ||
+                (albumId ? `https://music.amazon.com/albums/${albumId}` : null)
+
+            const albumData = albumDataCache.get(albumId)
+            const albumHeader = albumData?.methods?.[0]?.template?.headerText
+            const albumNameFromData = typeof albumHeader === 'object' ? albumHeader?.text : albumHeader
+            const albumName =
+                extractedAlbumName ||
+                albumNameFromData ||
+                'Unknown Album'
+
+            const songTitle =
+                (typeof item.primaryText === 'object' ? item.primaryText?.text : item.primaryText) ||
+                'Unknown Title'
+
             return {
                 id: songId || '',
-                title: item.primaryText?.text || 'Unknown Title',
+                title: songTitle,
                 image: cleanImageUrl(item.image || null),
                 url: songId ? `https://music.amazon.com/tracks/${songId}` : null,
                 duration,
@@ -265,9 +275,7 @@ export const createSearchAllPayload = async (config: any, resp: any): Promise<Se
                 album: {
                     id: albumId || '',
                     name: albumName,
-                    url:
-                        item.contextMenu?.options?.[0]?.onItemSelected?.[1]?.template?.templateData?.seoHead?.link?.[0]
-                            ?.href || null
+                    url: extractedAlbumUrl
                 },
 
                 artist: {
